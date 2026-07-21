@@ -297,6 +297,12 @@ const rnd = n => Array.from({length:n},()=>'0123456789abcdef'[Math.random()*16|0
 const fakeCid = () => 'bafybei' + Array.from({length:45},()=>'abcdefghijklmnopqrstuvwxyz234567'[Math.random()*32|0]).join('');
 const fakeTx  = () => '0x' + rnd(64);
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
+const fileToDataURL = f => new Promise((res,rej)=>{
+  const r = new FileReader();
+  r.onload = ()=>res(r.result);
+  r.onerror = rej;
+  r.readAsDataURL(f);
+});
 
 const short = a => a ? a.slice(0,6)+'…'+a.slice(-4) : '-';
 const fmtSize = b => b<1024?b+' B':b<1048576?(b/1024).toFixed(1)+' KB':(b/1048576).toFixed(2)+' MB';
@@ -432,11 +438,16 @@ $('btnUpload').onclick = async ()=>{
       '서명 완료 · <span class="mono" style="color:var(--accent)">'+tx.slice(0,20)+'…</span>';
   }
 
+  // 업로드한 실제 파일을 브라우저에 보관 (data URL) — 데모에서 원본 열람용
+  let dataUrl = null;
+  try { dataUrl = await fileToDataURL(picked); } catch(e){}
+
   block += 1;
   const a = {
     id: nextId++, cid, title:$('fTitle').value.trim(), desc:$('fDesc').value.trim(),
     mime: picked.type||'application/octet-stream', size:picked.size,
-    minter:account, owner:account, at:Date.now(), views:0, tx, blk:block
+    minter:account, owner:account, at:Date.now(), views:0, tx, blk:block,
+    data: dataUrl, fname: picked.name
   };
   assets.push(a);
   logs.unshift({t:'mint', id:a.id, who:account, blk:block, ts:a.at});
@@ -469,8 +480,11 @@ function renderGallery(){
   list.forEach(a=>{
     const d=document.createElement('div');
     d.className='nft';
+    const thumb = (a.data && a.mime.startsWith('image'))
+      ? '<div class="thumb" style="background:'+grad(a.id)+'"><img src="'+a.data+'" style="width:100%;height:100%;object-fit:cover" loading="lazy"></div>'
+      : '<div class="thumb" style="background:'+grad(a.id)+'"><div class="ic">'+icon(a.mime)+'</div></div>';
     d.innerHTML =
-      '<div class="thumb" style="background:'+grad(a.id)+'"><div class="ic">'+icon(a.mime)+'</div></div>'
+      thumb
       +'<div class="body"><div class="t">'+esc(a.title)+'</div>'
       +'<div class="m"><span>#'+a.id+'</span><span>👁 '+a.views+'</span></div></div>';
     d.onclick=()=>openDetail(a.id);
@@ -484,12 +498,27 @@ function openDetail(id){
   $('mTitle').textContent = a.title;
   $('mSub').textContent = 'Token #'+a.id+' · '+a.mime;
 
-  $('mBody').innerHTML =
-    '<div class="prev" style="background:'+grad(a.id)+'">'
+  // 실제 원본 미리보기 (업로드해서 발행한 자산은 data 보유)
+  let prev;
+  if(a.data && a.mime.startsWith('image'))
+    prev = '<div class="prev"><img src="'+a.data+'" style="max-width:100%;max-height:440px"></div>';
+  else if(a.data && a.mime.startsWith('video'))
+    prev = '<div class="prev"><video src="'+a.data+'" controls style="max-width:100%;max-height:440px"></video></div>';
+  else if(a.data && a.mime.startsWith('audio'))
+    prev = '<div class="prev" style="padding:30px"><audio src="'+a.data+'" controls style="width:100%"></audio></div>';
+  else if(a.data && (a.mime.includes('pdf')))
+    prev = '<div class="prev" style="padding:0"><iframe src="'+a.data+'" style="width:100%;height:440px;border:0;border-radius:10px"></iframe></div>';
+  else
+    prev = '<div class="prev" style="background:'+grad(a.id)+'">'
       +'<div style="text-align:center;padding:34px 20px">'
       +'<div style="font-size:50px;opacity:.65">'+icon(a.mime)+'</div>'
       +'<div style="font-size:11px;color:rgba(255,255,255,.55);margin-top:12px">'
-      +'실제 환경에서는 IPFS 게이트웨이의 원본이 표시됩니다</div></div></div>'
+      +(a.data ? '이 형식은 미리보기를 지원하지 않습니다 · 아래 버튼으로 열람하세요'
+               : '시연용 샘플 · 실제 환경에서는 IPFS 원본이 표시됩니다')
+      +'</div></div></div>';
+
+  $('mBody').innerHTML =
+    prev
 
     +'<div class="kv"><div class="k">설명</div><div class="v">'+(esc(a.desc)||'-')+'</div></div>'
     +'<div class="kv"><div class="k">IPFS CID</div><div class="v mono">'+a.cid+'</div></div>'
@@ -508,7 +537,28 @@ function openDetail(id){
 
   $('modal').classList.add('on');
 
-  $('btnOpen').onclick = ()=> toast('데모에서는 실제 파일이 열리지 않습니다');
+  $('btnOpen').onclick = ()=>{
+    if(a.data){
+      const w = window.open();
+      if(a.mime.startsWith('image'))
+        w.document.write('<img src="'+a.data+'" style="max-width:100%">');
+      else if(a.mime.startsWith('video'))
+        w.document.write('<video src="'+a.data+'" controls autoplay style="max-width:100%"></video>');
+      else if(a.mime.startsWith('audio'))
+        w.document.write('<audio src="'+a.data+'" controls autoplay></audio>');
+      else {
+        // pdf/기타: 다운로드
+        const link = document.createElement('a');
+        link.href = a.data; link.download = a.fname || a.title;
+        link.click();
+        w.close();
+        return;
+      }
+      w.document.title = a.title;
+    } else {
+      toast('시연용 샘플입니다. 직접 업로드한 파일은 원본이 열립니다');
+    }
+  };
 
   $('btnLog').onclick = async ()=>{
     if(!connected){ toast('먼저 지갑을 연결하세요','err'); return; }
